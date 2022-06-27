@@ -2,3 +2,5 @@
 out_azblob_*.h
 out_azblob_*.so
 coverage.out
+.vscode
+.vscode*

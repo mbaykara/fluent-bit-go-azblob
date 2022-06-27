@@ -2,15 +2,21 @@ package main
 
 import (
 	"bufio"
-	"bytes"
-	"compress/gzip"
 	"context"
+	"encoding/json"
+	"fmt"
+	"log"
 	"math/rand"
+	"os"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/streaming"
+	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
+	az "github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
 	"github.com/Azure/azure-storage-blob-go/azblob"
+	"github.com/kelseyhightower/envconfig"
 	uuid "github.com/satori/go.uuid"
 	"github.com/sirupsen/logrus"
 )
@@ -47,9 +53,6 @@ type AzblobUploader struct {
 	logger     *logrus.Entry
 }
 
-type Memorize struct {
-	LogData string
-}
 type LogData struct {
 	Stream     string `json:"stream"`
 	Logtag     string `json:"logtag"`
@@ -162,77 +165,53 @@ func (u *AzblobUploader) sendBatch(timeSlice string, b []byte) {
 	a := string(b)
 
 	bufio.NewScanner(strings.NewReader(a))
-	for i, line := in bufio.ScanLines(b, true)
+	scanner := bufio.NewScanner(strings.NewReader(a))
+	scanner.Split(bufio.ScanLines)
+	var data []string
+	for scanner.Scan() {
+		data = append(data, scanner.Text())
+	}
+	store := "["
+	for i := 0; i < len(data); i++ {
+		store = store + data[i] + ","
+	}
+	store = store + "]"
+	store = strings.ReplaceAll(store, ",]", "]")
+	//fmt.Println(store)
+	var (
+		c          []LogData
+		deployment string
+	)
 
-	logger.Info("---------- data start SendBactch")
-	logger.Info("---------- data end SendBactch")
-
-	var buf []byte
-	var err error
-	err = retry(u.config.BatchRetryLimit, func() error {
-		switch u.config.StoreAs {
-		case GzipFormat:
-			buf, err = makeGzip(b)
-			if err != nil {
-				u.logger.Error(err.Error())
-				return err
-			}
+	json.Unmarshal([]byte(store), &c)
+	switch {
+	case len(c[0].Kubernetes.Labels.App) > 0:
+		deployment = c[0].Kubernetes.Labels.App
+	case len(c[0].Kubernetes.Labels.K8s_App) > 0:
+		deployment = c[0].Kubernetes.Labels.K8s_App
+	default:
+		deployment = removeHash(c[0].Kubernetes.Pod)
+		if len(deployment) == 0 {
+			deployment = c[0].Kubernetes.Container
 		}
+	}
 
-		return u.upload(objectKey, buf)
-	})
-
-	if err != nil {
-		u.logger.Errorf("retry limit reached, blob=%s", objectKey)
+	for i := range c {
+		fmt.Println(c[i].Message)
+		u.upload(objectKey, c[i].Message+"\n", deployment, c[0].Kubernetes.Container)
 	}
 }
-
-func retry(attempts *uint64, f Func) error {
-	counter := uint64(0)
-	interval := time.Second
-
-	for {
-		err := f()
-
-		if err == nil {
-			return nil
-		}
-
-		if attempts == nil || counter < *attempts {
-			counter++
-
-			// Add some randomness to prevent creating a Thundering Herd
-			jitter := time.Duration(rand.Int63n(int64(interval)))
-			interval = interval + jitter/2
-			time.Sleep(interval)
-			continue
-		}
-
-		return err
+func removeHash(s string) string {
+	var podName string
+	for i := 0; i < len(s)-17; i++ {
+		podName += s[i : i+1]
 	}
+	return podName
 }
 
-// based on https://text.baldanders.info/golang/gzip-operation/
-func makeGzip(buf []byte) ([]byte, error) {
-	var b bytes.Buffer
-
-	err := func() error {
-		gw := gzip.NewWriter(&b)
-		gw.Name = "fluent-bit-go-azblob"
-		gw.ModTime = time.Now()
-
-		defer gw.Close()
-
-		if _, err := gw.Write(buf); err != nil {
-			return err
-		}
-		return nil
-	}()
-
-	return b.Bytes(), err
-}
-
-func (u *AzblobUploader) upload(objectKey string, b []byte) error {
+func (u *AzblobUploader) upload(objectKey string, b, deployment, k8sContainerName string) error {
+	ctx, cred := authServicePrincipal()
+	UNUSED(ctx)
 	ctx, cancel := context.WithTimeout(
 		context.Background(), Timeout*time.Second)
 	defer cancel()
@@ -249,17 +228,63 @@ func (u *AzblobUploader) upload(objectKey string, b []byte) error {
 		BlockSize:   BlockSize,
 		Parallelism: Parallelism,
 	}
-
-	_, err := azblob.UploadBufferToBlockBlob(ctx, b, blobURL, options)
-	logger.Info("=========upload start=============")
-	logger.Info(b)
-	logger.Info("=========upload  end=============")
+	UNUSED(blobURL, options)
+	blobWithDir := deployment + "/" + time.Now().Format("20060102") + "-" + k8sContainerName + ".log"
+	blobContainer := strings.ToLower(os.Getenv("CLUSTER_NAME"))
+	url := fmt.Sprintf("https://%s.blob.core.windows.net/%s/%s", os.Getenv("STORAGE_ACCOUNT_NAME"), blobContainer, blobWithDir)
+	appendBlobClient, err := az.NewAppendBlobClient(url, cred, nil)
+	_, err = appendBlobClient.AppendBlock(ctx, streaming.NopCloser(strings.NewReader(b)), nil)
 	if err != nil {
-		u.logger.Errorf("upload to blob error: %s", err.Error())
-		return err
+		_, err = appendBlobClient.Create(ctx, nil)
+		if err != nil {
+			logger.Printf("Failed to create new blob %s", err)
+		}
+		_, err = appendBlobClient.AppendBlock(ctx, streaming.NopCloser(strings.NewReader(b)), nil)
+		if err != nil {
+			logger.Fatalf("Failed to append the new Blob %s", err)
+		}
+
+	} else {
+		logger.Printf("Successfully appended to existing blob %s")
 	}
 
+	// _, err = azblob.UploadBufferToBlockBlob(ctx, []byte(b), blobURL, options)
+	// logger.Info(b)
+	// if err != nil {
+	// 	u.logger.Errorf("upload to blob error: %s", err.Error())
+	// 	return err
+	// }
+
 	return nil
+}
+
+type Credentials struct {
+	Client  string `envconfig:"AZURE_CLIENT_ID"`
+	Secret  string `envconfig:"AZURE_CLIENT_SECRET"`
+	Tenant  string `envconfig:"AZURE_TENANT_ID"`
+	Subs    string `envconfig:"SUBSCRIPTION_ID"`
+	Cluster string `envconfig:"CLUSTER_NAME"`
+}
+
+func authServicePrincipal() (context.Context, *azidentity.DefaultAzureCredential) {
+	if !authEnvVars() {
+		log.Fatalln("Error: Authentication environment variables not found")
+	}
+	ctx := context.Background()
+	cred, err := azidentity.NewDefaultAzureCredential(nil)
+	if err != nil {
+		log.Fatalf("Authentication Failed %s", err)
+	}
+	return ctx, cred
+}
+
+func authEnvVars() bool {
+	var c Credentials
+	err := envconfig.Process("Client", &c)
+	if err != nil {
+		log.Fatal(err.Error())
+	}
+	return true
 }
 
 func (u *AzblobUploader) ensureContainer(ctx context.Context) error {
@@ -281,3 +306,4 @@ func (u *AzblobUploader) ensureContainer(ctx context.Context) error {
 func init() {
 	rand.Seed(time.Now().UnixNano())
 }
+func UNUSED(x ...interface{}) {}
