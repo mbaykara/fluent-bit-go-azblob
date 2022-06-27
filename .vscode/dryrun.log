@@ -1,0 +1,5 @@
+make --dry-run --always-make --keep-going --print-directory
+make: Entering directory '/home/mbaykara/dev/fluent-bit-go-azblob'
+go build -ldflags "-X main.Version=0.1.0" -buildmode=c-shared -o out_azblob_linux_amd64.so ./cmd/out_azblob/config.go ./cmd/out_azblob/out_azblob.go ./cmd/out_azblob/out_azblob_test.go ./cmd/out_azblob/uploader.go ./cmd/out_azblob/logger.go
+make: Leaving directory '/home/mbaykara/dev/fluent-bit-go-azblob'
+ 

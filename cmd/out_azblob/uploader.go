@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"context"
@@ -44,6 +45,32 @@ type AzblobUploader struct {
 	wg         sync.WaitGroup
 	config     *AzblobConfig
 	logger     *logrus.Entry
+}
+
+type Memorize struct {
+	LogData string
+}
+type LogData struct {
+	Stream     string `json:"stream"`
+	Logtag     string `json:"logtag"`
+	Message    string `json:"message"`
+	Kubernetes Kubernetes
+}
+
+type Kubernetes struct {
+	Pod       string `json:"pod_name"`
+	Namespace string `json:"namespace_name"`
+	Container string `json:"container_name"`
+	Host      string `json:"host"`
+	Image     string `json:"container_image"`
+	Labels    Labels
+}
+
+type Labels struct {
+	App      string `json:"app"`
+	K8s_App  string `json:"k8s_app"`
+	Type     string `json:"type"`
+	Instance string `json:"app.kubernetes.io/instance"`
 }
 
 func NewUploader(c *AzblobConfig, l *logrus.Entry) (*AzblobUploader, error) {
@@ -132,6 +159,13 @@ func (u *AzblobUploader) sendBatch(timeSlice string, b []byte) {
 	objectKey = strings.ReplaceAll(objectKey, "%{time_slice}", timeSlice)
 
 	u.logger.Debugf("upload blob=%s size: %d bytes", objectKey, len(b))
+	a := string(b)
+
+	bufio.NewScanner(strings.NewReader(a))
+	for i, line := in bufio.ScanLines(b, true)
+
+	logger.Info("---------- data start SendBactch")
+	logger.Info("---------- data end SendBactch")
 
 	var buf []byte
 	var err error
@@ -215,7 +249,11 @@ func (u *AzblobUploader) upload(objectKey string, b []byte) error {
 		BlockSize:   BlockSize,
 		Parallelism: Parallelism,
 	}
+
 	_, err := azblob.UploadBufferToBlockBlob(ctx, b, blobURL, options)
+	logger.Info("=========upload start=============")
+	logger.Info(b)
+	logger.Info("=========upload  end=============")
 	if err != nil {
 		u.logger.Errorf("upload to blob error: %s", err.Error())
 		return err

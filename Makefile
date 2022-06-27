@@ -1,4 +1,4 @@
-NAME = azblob-plugin
+NAME = aiproductive.azurecr.io/raw-log-forwarder
 VERSION = 0.1.0
 
 GOFMT ?= gofmt "-s"
@@ -43,6 +43,7 @@ clean:
 
 image:
 	docker build -f build/image/Dockerfile -t $(NAME):$(VERSION) --rm $(DOCKER_FLAGS) .
+	docker push $(NAME):$(VERSION)
 
 
 runtest:

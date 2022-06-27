@@ -14,8 +14,8 @@ import (
 
 // Default configuration
 const (
-	DefaultObjectKeyFormat = "%{path}%{time_slice}_%{uuid}.%{file_extension}"
-	DefaultTimeSliceFormat = "2006010215-04"
+	DefaultObjectKeyFormat = "%{path}%{time_slice}_%{hostname}.%{file_extension}"
+	DefaultTimeSliceFormat = "20060102"
 	DefaultLogLevel        = "info"
 	DefaultBatchWait       = 5 * time.Second
 	DefaultBatchLimitSize  = 32 * 1024 // 32k
