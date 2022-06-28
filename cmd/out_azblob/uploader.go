@@ -76,6 +76,14 @@ type Labels struct {
 	Instance string `json:"app.kubernetes.io/instance"`
 }
 
+type Credentials struct {
+	Client  string `envconfig:"AZURE_CLIENT_ID"`
+	Secret  string `envconfig:"AZURE_CLIENT_SECRET"`
+	Tenant  string `envconfig:"AZURE_TENANT_ID"`
+	Subs    string `envconfig:"SUBSCRIPTION_ID"`
+	Cluster string `envconfig:"CLUSTER_NAME"`
+}
+
 func NewUploader(c *AzblobConfig, l *logrus.Entry) (*AzblobUploader, error) {
 	checkInterval := c.BatchWait / 10
 	if checkInterval < MinCheckInterval {
@@ -191,22 +199,14 @@ func (u *AzblobUploader) sendBatch(timeSlice string, b []byte) {
 		deployment = c[0].Kubernetes.Labels.K8s_App
 	default:
 		deployment = removeHash(c[0].Kubernetes.Pod)
-		if len(deployment) == 0 {
+		if len(deployment) < 10 {
 			deployment = c[0].Kubernetes.Container
 		}
 	}
-
 	for i := range c {
 		fmt.Println(c[i].Message)
 		u.upload(objectKey, c[i].Message+"\n", deployment, c[0].Kubernetes.Container)
 	}
-}
-func removeHash(s string) string {
-	var podName string
-	for i := 0; i < len(s)-17; i++ {
-		podName += s[i : i+1]
-	}
-	return podName
 }
 
 func (u *AzblobUploader) upload(objectKey string, b, deployment, k8sContainerName string) error {
@@ -223,16 +223,11 @@ func (u *AzblobUploader) upload(objectKey string, b, deployment, k8sContainerNam
 		}
 	}
 
-	blobURL := u.container.NewBlockBlobURL(objectKey)
-	options := azblob.UploadToBlockBlobOptions{
-		BlockSize:   BlockSize,
-		Parallelism: Parallelism,
-	}
-	UNUSED(blobURL, options)
 	blobWithDir := deployment + "/" + time.Now().Format("20060102") + "-" + k8sContainerName + ".log"
 	blobContainer := strings.ToLower(os.Getenv("CLUSTER_NAME"))
 	url := fmt.Sprintf("https://%s.blob.core.windows.net/%s/%s", os.Getenv("STORAGE_ACCOUNT_NAME"), blobContainer, blobWithDir)
 	appendBlobClient, err := az.NewAppendBlobClient(url, cred, nil)
+	UNUSED(err)
 	_, err = appendBlobClient.AppendBlock(ctx, streaming.NopCloser(strings.NewReader(b)), nil)
 	if err != nil {
 		_, err = appendBlobClient.Create(ctx, nil)
@@ -245,25 +240,17 @@ func (u *AzblobUploader) upload(objectKey string, b, deployment, k8sContainerNam
 		}
 
 	} else {
-		logger.Printf("Successfully appended to existing blob %s")
+		logger.Printf("Successfully appended to existing blob")
 	}
-
-	// _, err = azblob.UploadBufferToBlockBlob(ctx, []byte(b), blobURL, options)
-	// logger.Info(b)
-	// if err != nil {
-	// 	u.logger.Errorf("upload to blob error: %s", err.Error())
-	// 	return err
-	// }
-
 	return nil
 }
 
-type Credentials struct {
-	Client  string `envconfig:"AZURE_CLIENT_ID"`
-	Secret  string `envconfig:"AZURE_CLIENT_SECRET"`
-	Tenant  string `envconfig:"AZURE_TENANT_ID"`
-	Subs    string `envconfig:"SUBSCRIPTION_ID"`
-	Cluster string `envconfig:"CLUSTER_NAME"`
+func removeHash(s string) string {
+	var podName string
+	for i := 0; i < len(s)-17; i++ {
+		podName += s[i : i+1]
+	}
+	return podName
 }
 
 func authServicePrincipal() (context.Context, *azidentity.DefaultAzureCredential) {
